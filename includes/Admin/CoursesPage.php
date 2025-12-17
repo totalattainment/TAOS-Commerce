@@ -118,18 +118,38 @@ class TAOS_Admin_Courses_Page {
     }
 
     private function render_form($course_id = 0) {
-        $this->handle_save();
+        $save_error = $this->handle_save();
+
+        $posted_data = null;
+        if (is_wp_error($save_error) && !empty($_POST)) {
+            $posted_data = wp_unslash($_POST);
+        }
 
         $course = $course_id ? TAOS_Commerce_Course::get_by_id($course_id) : null;
         $entitlements = $course ? $course->get_entitlements() : [];
         $enabled_gateways = $course ? (json_decode($course->enabled_gateways, true) ?: []) : [];
+
+        if ($posted_data) {
+            $course = (object) array_merge(
+                $course ? get_object_vars($course) : [],
+                $posted_data
+            );
+            $entitlements = array_filter(array_map('trim', explode("\n", $posted_data['entitlements'] ?? '')));
+            $enabled_gateways = isset($posted_data['enabled_gateways']) ? (array) $posted_data['enabled_gateways'] : $enabled_gateways;
+        }
         $all_gateways = $this->gateway_registry->get_all();
         
-        $is_edit = (bool)$course;
+        $is_edit = $course_id > 0;
         $page_title = $is_edit ? __('Edit Course', 'taos-commerce') : __('Add New Course', 'taos-commerce');
         ?>
         <div class="wrap taos-commerce-wrap">
             <h1><?php echo esc_html($page_title); ?></h1>
+
+            <?php if (is_wp_error($save_error)): ?>
+                <div class="notice notice-error is-dismissible">
+                    <p><?php echo esc_html($save_error->get_error_message()); ?></p>
+                </div>
+            <?php endif; ?>
 
             <form method="post" action="">
                 <?php wp_nonce_field('taos_commerce_save_course', 'taos_commerce_nonce'); ?>
@@ -260,7 +280,7 @@ class TAOS_Admin_Courses_Page {
 
     private function handle_save() {
         if (!isset($_POST['save_course'])) {
-            return;
+            return null;
         }
 
         if (!wp_verify_nonce($_POST['taos_commerce_nonce'] ?? '', 'taos_commerce_save_course')) {
@@ -283,10 +303,35 @@ class TAOS_Admin_Courses_Page {
             'entitlements' => $entitlements
         ];
 
+        if (empty($data['course_key']) || empty($data['name'])) {
+            return new WP_Error('taos_course_validation', __('Course key and name are required.', 'taos-commerce'));
+        }
+
+        if ($data['payment_type'] === 'free') {
+            $data['price'] = 0;
+        }
+
+        if (!in_array($data['course_key'], $data['entitlements'], true)) {
+            $data['entitlements'][] = $data['course_key'];
+        }
+
         if ($course_id) {
-            TAOS_Commerce_Course::update($course_id, $data);
+            $existing = TAOS_Commerce_Course::get_by_id($course_id);
+            if (!$existing) {
+                return new WP_Error('taos_course_missing', __('Course not found.', 'taos-commerce'));
+            }
+
+            $result = TAOS_Commerce_Course::update($course_id, $data);
         } else {
-            TAOS_Commerce_Course::create($data);
+            if (TAOS_Commerce_Course::get_by_key($data['course_key'])) {
+                return new WP_Error('taos_course_exists', __('A course with this key already exists.', 'taos-commerce'));
+            }
+
+            $result = TAOS_Commerce_Course::create($data);
+        }
+
+        if (is_wp_error($result)) {
+            return $result;
         }
 
         wp_redirect(admin_url('admin.php?page=taos-commerce-courses&saved=1'));

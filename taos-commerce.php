@@ -3,7 +3,7 @@
  * Plugin Name: TA-OS Commerce
  * Plugin URI: https://totalattainment.co.uk
  * Description: Modular payments system for TA-OS. Gateway-agnostic with PayPal support. Admin-configurable courses, prices, and entitlements.
- * Version: 1.0.1
+ * Version: 1.0.2
  * Author: Total Attainment
  * Author URI: https://totalattainment.co.uk
  * Text Domain: taos-commerce
@@ -14,7 +14,7 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
-define('TAOS_COMMERCE_VERSION', '1.0.1');
+define('TAOS_COMMERCE_VERSION', '1.0.2');
 define('TAOS_COMMERCE_PATH', plugin_dir_path(__FILE__));
 define('TAOS_COMMERCE_URL', plugin_dir_url(__FILE__));
 
@@ -57,6 +57,10 @@ class TAOS_Commerce {
         add_action('admin_enqueue_scripts', [$this, 'enqueue_admin_assets']);
         add_action('rest_api_init', [$this, 'register_rest_routes']);
         add_action('init', [$this, 'register_gateways']);
+        add_action('init', [$this, 'register_rewrite_rules']);
+        add_action('init', [$this, 'register_shortcodes']);
+        add_filter('query_vars', [$this, 'register_query_vars']);
+        add_filter('template_include', [$this, 'maybe_load_checkout_template']);
     }
 
     public function check_upgrade() {
@@ -66,10 +70,13 @@ class TAOS_Commerce {
             $this->run_upgrade($installed_version);
             update_option('taos_commerce_version', TAOS_COMMERCE_VERSION);
         }
+
+        $this->ensure_tables_exist();
     }
 
     private function run_upgrade($from_version) {
         $this->create_tables();
+        flush_rewrite_rules();
         
         do_action('taos_commerce_upgraded', $from_version, TAOS_COMMERCE_VERSION);
     }
@@ -139,6 +146,29 @@ class TAOS_Commerce {
 
         require_once(ABSPATH . 'wp-admin/includes/upgrade.php');
         dbDelta($sql);
+    }
+
+    private function ensure_tables_exist() {
+        global $wpdb;
+
+        $tables = [
+            $wpdb->prefix . 'taos_commerce_courses',
+            $wpdb->prefix . 'taos_commerce_course_entitlements',
+            $wpdb->prefix . 'taos_commerce_orders'
+        ];
+
+        $missing = [];
+        foreach ($tables as $table) {
+            $found = $wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s', $table));
+            if ($found !== $table) {
+                $missing[] = $table;
+            }
+        }
+
+        if (!empty($missing)) {
+            taos_commerce_log('Missing commerce tables; attempting to recreate.', ['tables' => $missing]);
+            $this->create_tables();
+        }
     }
 
     private function set_default_options() {
@@ -215,6 +245,18 @@ class TAOS_Commerce {
         $page->render();
     }
 
+    public function render_checkout_shortcode($atts = []) {
+        $atts = shortcode_atts([
+            'course' => ''
+        ], $atts);
+
+        $course_key = sanitize_key($atts['course'] ?: ($_GET['course'] ?? ''));
+
+        ob_start();
+        echo $this->get_checkout_markup($course_key);
+        return ob_get_clean();
+    }
+
     public function enqueue_admin_assets($hook) {
         if (strpos($hook, 'taos-commerce') === false) {
             return;
@@ -259,6 +301,45 @@ class TAOS_Commerce {
         do_action('taos_commerce_register_gateways', $this->gateway_registry);
     }
 
+    public function register_rewrite_rules() {
+        add_rewrite_rule('^checkout/?$', 'index.php?taos_commerce_checkout=1', 'top');
+    }
+
+    public function register_query_vars($vars) {
+        $vars[] = 'taos_commerce_checkout';
+        $vars[] = 'course';
+        return $vars;
+    }
+
+    public function register_shortcodes() {
+        add_shortcode('taos_commerce_checkout', [$this, 'render_checkout_shortcode']);
+    }
+
+    public function maybe_load_checkout_template($template) {
+        $is_checkout = get_query_var('taos_commerce_checkout');
+        if (!$is_checkout) {
+            return $template;
+        }
+
+        $course_key = sanitize_key(get_query_var('course'));
+        $course = $course_key ? TAOS_Commerce_Course::get_by_key($course_key) : null;
+
+        if (!$course) {
+            status_header(404);
+            taos_commerce_log('Checkout course not found', ['course_key' => $course_key]);
+        }
+
+        $GLOBALS['taos_commerce_checkout_course'] = $course;
+        $GLOBALS['taos_commerce_checkout_course_key'] = $course_key;
+
+        $template_path = TAOS_COMMERCE_PATH . 'templates/checkout.php';
+        if (file_exists($template_path)) {
+            return $template_path;
+        }
+
+        return $template;
+    }
+
     public function handle_paypal_webhook(\WP_REST_Request $request) {
         $gateway = $this->gateway_registry->get('paypal');
         if (!$gateway) {
@@ -278,6 +359,7 @@ class TAOS_Commerce {
 
         $course = TAOS_Commerce_Course::get_by_key($course_key);
         if (!$course || $course->status !== 'active') {
+            taos_commerce_log('Checkout attempt for missing/inactive course', ['course_key' => $course_key]);
             return new \WP_Error('course_not_found', 'Course not found or inactive', ['status' => 404]);
         }
 
@@ -286,12 +368,31 @@ class TAOS_Commerce {
             return new \WP_Error('gateway_unavailable', 'Payment gateway not available', ['status' => 400]);
         }
 
+        $gateway_settings = method_exists($gateway, 'get_settings') ? $gateway->get_settings() : [];
+
+        if (method_exists($gateway, 'validate_settings') && !$gateway->validate_settings($gateway_settings)) {
+            taos_commerce_log('Gateway validation failed during checkout', ['gateway' => $gateway_id]);
+            return new \WP_Error('gateway_invalid', 'Payment gateway is not configured correctly', ['status' => 400]);
+        }
+
         $enabled_gateways = json_decode($course->enabled_gateways, true) ?: [];
         if (!in_array($gateway_id, $enabled_gateways)) {
             return new \WP_Error('gateway_not_allowed', 'Gateway not enabled for this course', ['status' => 400]);
         }
 
-        return $gateway->create_order($course, get_current_user_id());
+        $result = $gateway->create_order($course, get_current_user_id());
+
+        if (is_wp_error($result)) {
+            taos_commerce_log('Gateway returned error during order creation', ['gateway' => $gateway_id, 'error' => $result->get_error_message()]);
+            return $result;
+        }
+
+        if (isset($result['error'])) {
+            taos_commerce_log('Gateway failed to create order', ['gateway' => $gateway_id, 'message' => $result['error']]);
+            return new \WP_Error('order_create_failed', $result['error'], ['status' => 400]);
+        }
+
+        return $result;
     }
 
     public function capture_checkout_order(\WP_REST_Request $request) {
@@ -307,6 +408,15 @@ class TAOS_Commerce {
             return new \WP_Error('order_not_found', 'Order not found', ['status' => 404]);
         }
 
+        if (!empty($order->transaction_id) && $order->transaction_id !== $paypal_order_id) {
+            taos_commerce_log('PayPal order ID mismatch during capture', [
+                'expected' => $order->transaction_id,
+                'received' => $paypal_order_id,
+                'order_id' => $order_id
+            ]);
+            return new \WP_Error('transaction_mismatch', 'Payment details did not match the order', ['status' => 400]);
+        }
+
         if ($order->status === TAOS_Commerce_Order::STATUS_COMPLETED) {
             return ['success' => true, 'message' => 'Order already completed'];
         }
@@ -318,12 +428,60 @@ class TAOS_Commerce {
 
         $result = $gateway->capture_order($paypal_order_id);
         if (is_wp_error($result)) {
+            taos_commerce_log('PayPal capture failed', ['order_id' => $order_id, 'error' => $result->get_error_message()]);
             return $result;
         }
 
         TAOS_Commerce_Order::complete_order($order_id, $paypal_order_id, $result);
 
+        taos_commerce_log('PayPal payment captured and order completed', ['order_id' => $order_id]);
+
         return ['success' => true, 'message' => 'Payment completed successfully'];
+    }
+
+    private function get_checkout_markup($course_key) {
+        $course = $course_key ? TAOS_Commerce_Course::get_by_key($course_key) : null;
+
+        if (!$course) {
+            taos_commerce_log('Checkout attempted without valid course', ['course_key' => $course_key]);
+            return '<div class="taos-checkout-error">' . esc_html__('Course not found.', 'taos-commerce') . '</div>';
+        }
+
+        if ($course->status !== 'active') {
+            taos_commerce_log('Inactive course requested at checkout', ['course_key' => $course_key]);
+            return '<div class="taos-checkout-error">' . esc_html__('This course is currently unavailable.', 'taos-commerce') . '</div>';
+        }
+
+        $price_display = $course->payment_type === 'free'
+            ? esc_html__('Free', 'taos-commerce')
+            : esc_html($course->currency . ' ' . number_format($course->price, 2));
+
+        $button = taos_commerce_get_purchase_button($course->course_key);
+
+        if (empty($button)) {
+            taos_commerce_log('Checkout button could not be rendered', ['course_key' => $course_key]);
+            $button = '<div class="taos-checkout-error">' . esc_html__('Checkout is unavailable for this course.', 'taos-commerce') . '</div>';
+        }
+
+        ob_start();
+        ?>
+        <div class="taos-checkout-wrapper">
+            <h1 class="taos-checkout-title"><?php esc_html_e('Checkout', 'taos-commerce'); ?></h1>
+            <div class="taos-checkout-course">
+                <h2><?php echo esc_html($course->name); ?></h2>
+                <?php if (!empty($course->description)): ?>
+                    <p class="taos-checkout-description"><?php echo esc_html($course->description); ?></p>
+                <?php endif; ?>
+                <p class="taos-checkout-price">
+                    <strong><?php esc_html_e('Price:', 'taos-commerce'); ?></strong> <?php echo $price_display; ?>
+                </p>
+            </div>
+            <div class="taos-checkout-actions">
+                <?php echo $button; ?>
+            </div>
+        </div>
+        <?php
+        return ob_get_clean();
     }
 
     public function get_gateway_registry() {
@@ -349,6 +507,22 @@ class TAOS_Commerce {
 
 function taos_commerce() {
     return TAOS_Commerce::instance();
+}
+
+function taos_commerce_log($message, $context = []) {
+    if (!defined('WP_DEBUG') || !WP_DEBUG) {
+        return;
+    }
+
+    if (!is_string($message)) {
+        $message = wp_json_encode($message);
+    }
+
+    if (!empty($context)) {
+        $message .= ' ' . wp_json_encode($context);
+    }
+
+    error_log('[TAOS Commerce] ' . $message);
 }
 
 function taos_grant_entitlement($user_id, $entitlement_slug, $source = 'purchase') {

@@ -91,7 +91,8 @@ class TAOS_Commerce_Course {
         ]);
 
         if (!$result) {
-            return false;
+            self::log_db_error('create', $wpdb->last_error);
+            return new \WP_Error('taos_course_create_failed', __('Failed to save course.', 'taos-commerce'));
         }
 
         $course_id = $wpdb->insert_id;
@@ -132,7 +133,12 @@ class TAOS_Commerce_Course {
         }
 
         if (!empty($update_data)) {
-            $wpdb->update($table, $update_data, ['id' => $id]);
+            $result = $wpdb->update($table, $update_data, ['id' => $id]);
+
+            if ($result === false) {
+                self::log_db_error('update', $wpdb->last_error);
+                return new \WP_Error('taos_course_update_failed', __('Failed to update course.', 'taos-commerce'));
+            }
         }
 
         if (isset($data['entitlements'])) {
@@ -167,7 +173,9 @@ class TAOS_Commerce_Course {
 
         $wpdb->delete($table, ['course_id' => $course_id]);
 
-        foreach ((array)$entitlements as $slug) {
+        $sanitized = array_unique(array_filter(array_map('sanitize_key', (array) $entitlements)));
+
+        foreach ($sanitized as $slug) {
             $wpdb->insert($table, [
                 'course_id' => $course_id,
                 'entitlement_slug' => sanitize_key($slug)
@@ -189,5 +197,11 @@ class TAOS_Commerce_Course {
         $course->created_at = $row->created_at;
         $course->updated_at = $row->updated_at;
         return $course;
+    }
+
+    private static function log_db_error($context, $error_message) {
+        if (defined('WP_DEBUG') && WP_DEBUG) {
+            error_log(sprintf('[TAOS Commerce][Course %s] %s', $context, $error_message));
+        }
     }
 }
