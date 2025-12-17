@@ -1,6 +1,6 @@
 # TA-OS Commerce
 
-**Version 1.0.1** - Modular payments system for TA-OS. Gateway-agnostic with PayPal support.
+**Version 1.2.1** - Modular payments system for TA-OS. Gateway-agnostic with PayPal support.
 
 ## Overview
 
