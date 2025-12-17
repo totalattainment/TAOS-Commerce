@@ -1,0 +1,141 @@
+.taos-commerce-wrap {
+    max-width: 1200px;
+}
+
+.taos-commerce-wrap h1 {
+    margin-bottom: 20px;
+}
+
+.taos-gateways-table .column-enabled {
+    width: 80px;
+}
+
+.taos-gateways-table .column-actions {
+    width: 100px;
+}
+
+.taos-toggle {
+    position: relative;
+    display: inline-block;
+    width: 44px;
+    height: 24px;
+}
+
+.taos-toggle input {
+    opacity: 0;
+    width: 0;
+    height: 0;
+}
+
+.taos-toggle-slider {
+    position: absolute;
+    cursor: pointer;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background-color: #ccc;
+    transition: 0.3s;
+    border-radius: 24px;
+}
+
+.taos-toggle-slider:before {
+    position: absolute;
+    content: "";
+    height: 18px;
+    width: 18px;
+    left: 3px;
+    bottom: 3px;
+    background-color: white;
+    transition: 0.3s;
+    border-radius: 50%;
+}
+
+.taos-toggle input:checked + .taos-toggle-slider {
+    background-color: #0073aa;
+}
+
+.taos-toggle input:checked + .taos-toggle-slider:before {
+    transform: translateX(20px);
+}
+
+.taos-gateway-settings {
+    background: #f9f9f9;
+}
+
+.taos-settings-panel {
+    padding: 20px;
+    border-left: 4px solid #0073aa;
+}
+
+.taos-settings-panel h3 {
+    margin-top: 0;
+    margin-bottom: 20px;
+}
+
+.taos-field {
+    margin-bottom: 20px;
+}
+
+.taos-field label {
+    display: block;
+    font-weight: 600;
+    margin-bottom: 5px;
+}
+
+.taos-field .description {
+    color: #666;
+    font-style: italic;
+    margin-bottom: 5px;
+}
+
+.taos-badge {
+    display: inline-block;
+    padding: 3px 8px;
+    border-radius: 3px;
+    font-size: 12px;
+    font-weight: 500;
+    text-transform: uppercase;
+}
+
+.taos-badge-active,
+.taos-badge-completed {
+    background: #d4edda;
+    color: #155724;
+}
+
+.taos-badge-inactive,
+.taos-badge-pending {
+    background: #fff3cd;
+    color: #856404;
+}
+
+.taos-badge-paid {
+    background: #d1ecf1;
+    color: #0c5460;
+}
+
+.taos-badge-free {
+    background: #e2e3e5;
+    color: #383d41;
+}
+
+.taos-badge-failed,
+.taos-badge-refunded {
+    background: #f8d7da;
+    color: #721c24;
+}
+
+.taos-badge-processing {
+    background: #cce5ff;
+    color: #004085;
+}
+
+.form-table .taos-price-row {
+    transition: opacity 0.3s;
+}
+
+.taos-paypal-button {
+    max-width: 300px;
+    margin: 10px 0;
+}
