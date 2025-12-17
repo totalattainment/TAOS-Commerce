@@ -24,6 +24,10 @@ class TAOS_PayPal_Gateway implements TAOS_Gateway_Interface {
         return 'Accept payments via PayPal. Supports PayPal balance, cards, and Pay Later.';
     }
 
+    public function get_settings(): array {
+        return $this->settings;
+    }
+
     public function get_icon(): string {
         return 'dashicons-money-alt';
     }
@@ -87,27 +91,58 @@ class TAOS_PayPal_Gateway implements TAOS_Gateway_Interface {
         $sdk_url .= '&currency=' . urlencode($course->currency);
 
         $container_id = 'paypal-button-' . $course->course_key;
+        $create_endpoint = esc_url_raw(rest_url('taos-commerce/v1/create-order'));
+        $capture_endpoint = esc_url_raw(rest_url('taos-commerce/v1/capture-order'));
+        $success_redirect = esc_url_raw(home_url('/dashboard/?payment=success'));
 
         return sprintf(
             '<div id="%s" class="taos-paypal-button" data-course="%s" data-amount="%s" data-currency="%s"></div>
             <script src="%s"></script>
             <script>
             (function() {
+                var taosOrderId = null;
                 paypal.Buttons({
                     createOrder: function(data, actions) {
-                        return fetch("/wp-json/taos-commerce/v1/create-order", {
+                        return fetch("%s", {
                             method: "POST",
+                            credentials: "same-origin",
                             headers: {"Content-Type": "application/json"},
                             body: JSON.stringify({
                                 course_key: "%s",
                                 gateway: "paypal"
                             })
-                        }).then(function(res) { return res.json(); })
-                          .then(function(data) { return data.paypal_order_id; });
+                        })
+                        .then(function(res) { return res.json(); })
+                        .then(function(data) {
+                            if (!data || data.error || data.code) {
+                                throw new Error(data.message || data.error || "Failed to create PayPal order");
+                            }
+                            taosOrderId = data.order_id;
+                            return data.paypal_order_id;
+                        });
                     },
                     onApprove: function(data, actions) {
-                        return actions.order.capture().then(function(details) {
-                            window.location.href = "%s?payment=success&order_id=" + data.orderID;
+                        return fetch("%s", {
+                            method: "POST",
+                            credentials: "same-origin",
+                            headers: {"Content-Type": "application/json"},
+                            body: JSON.stringify({
+                                paypal_order_id: data.orderID,
+                                order_id: taosOrderId
+                            })
+                        })
+                        .then(function(res) { return res.json(); })
+                        .then(function(response) {
+                            if (response && response.success) {
+                                window.location.href = "%s";
+                                return;
+                            }
+
+                            throw new Error(response && response.message ? response.message : "Payment capture failed");
+                        })
+                        .catch(function(err) {
+                            console.error("PayPal capture failed", err);
+                            alert("Payment failed. Please contact support or try again.");
                         });
                     },
                     onError: function(err) {
@@ -123,7 +158,9 @@ class TAOS_PayPal_Gateway implements TAOS_Gateway_Interface {
             esc_attr($course->currency),
             esc_url($sdk_url),
             esc_js($course->course_key),
-            esc_url(home_url('/dashboard/')),
+            esc_js($create_endpoint),
+            esc_js($capture_endpoint),
+            esc_js($success_redirect),
             esc_js($container_id)
         );
     }
@@ -142,6 +179,14 @@ class TAOS_PayPal_Gateway implements TAOS_Gateway_Interface {
             'currency' => $course->currency,
             'status' => TAOS_Commerce_Order::STATUS_PENDING
         ]);
+
+        if (is_wp_error($order_id)) {
+            return ['error' => $order_id->get_error_message()];
+        }
+
+        if (!$order_id) {
+            return ['error' => 'Failed to create order'];
+        }
 
         $api_url = $this->is_sandbox()
             ? 'https://api-m.sandbox.paypal.com/v2/checkout/orders'
@@ -234,6 +279,7 @@ class TAOS_PayPal_Gateway implements TAOS_Gateway_Interface {
         $event = json_decode($body, true);
 
         if (!$event || empty($event['event_type'])) {
+            taos_commerce_log('Invalid PayPal webhook received');
             return new \WP_REST_Response(['error' => 'Invalid webhook payload'], 400);
         }
 
@@ -249,6 +295,7 @@ class TAOS_PayPal_Gateway implements TAOS_Gateway_Interface {
                 $order = TAOS_Commerce_Order::get_by_transaction_id($paypal_order_id);
                 if ($order && $order->status !== TAOS_Commerce_Order::STATUS_COMPLETED) {
                     TAOS_Commerce_Order::complete_order($order->id, $paypal_order_id, $event);
+                    taos_commerce_log('PayPal webhook completed order', ['order_id' => $order->id]);
                 }
             }
         }
