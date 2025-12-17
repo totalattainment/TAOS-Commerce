@@ -91,8 +91,14 @@ class TAOS_Commerce_Course {
         ]);
 
         if (!$result) {
-            self::log_db_error('create', $wpdb->last_error);
-            return new \WP_Error('taos_course_create_failed', __('Failed to save course.', 'taos-commerce'));
+            $db_error = wp_strip_all_tags($wpdb->last_error);
+            self::log_db_error('create', $db_error);
+
+            $message = $db_error
+                ? sprintf(__('Failed to save course: %s', 'taos-commerce'), $db_error)
+                : __('Failed to save course.', 'taos-commerce');
+
+            return new \WP_Error('taos_course_create_failed', $message);
         }
 
         $course_id = $wpdb->insert_id;
@@ -136,8 +142,14 @@ class TAOS_Commerce_Course {
             $result = $wpdb->update($table, $update_data, ['id' => $id]);
 
             if ($result === false) {
-                self::log_db_error('update', $wpdb->last_error);
-                return new \WP_Error('taos_course_update_failed', __('Failed to update course.', 'taos-commerce'));
+                $db_error = wp_strip_all_tags($wpdb->last_error);
+                self::log_db_error('update', $db_error);
+
+                $message = $db_error
+                    ? sprintf(__('Failed to update course: %s', 'taos-commerce'), $db_error)
+                    : __('Failed to update course.', 'taos-commerce');
+
+                return new \WP_Error('taos_course_update_failed', $message);
             }
         }
 
