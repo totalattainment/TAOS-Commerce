@@ -275,6 +275,17 @@ class TAOS_PayPal_Gateway implements TAOS_Gateway_Interface {
             return new \WP_Error('not_completed', 'Payment not completed');
         }
 
+        $order = TAOS_Commerce_Order::get_by_transaction_id($paypal_order_id);
+
+        if ($order && !empty($order->user_id)) {
+            $course = TAOS_Commerce_Course::get_by_id($order->course_id);
+            $course_key = $course->course_key ?? '';
+
+            if (!empty($course_key)) {
+                taos_grant_entitlement($order->user_id, $course_key, 'purchase');
+            }
+        }
+
         return $body;
     }
 
