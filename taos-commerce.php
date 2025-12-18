@@ -3,7 +3,7 @@
  * Plugin Name: TA-OS Commerce
  * Plugin URI: https://totalattainment.co.uk
  * Description: Modular payments system for TA-OS. Gateway-agnostic with PayPal support. Admin-configurable courses, prices, and entitlements.
- * Version: 1.0.2
+ * Version: 1.2.1
  * Author: Total Attainment
  * Author URI: https://totalattainment.co.uk
  * Text Domain: taos-commerce
@@ -14,7 +14,7 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
-define('TAOS_COMMERCE_VERSION', '1.0.2');
+define('TAOS_COMMERCE_VERSION', '1.2.1');
 define('TAOS_COMMERCE_PATH', plugin_dir_path(__FILE__));
 define('TAOS_COMMERCE_URL', plugin_dir_url(__FILE__));
 
@@ -31,6 +31,7 @@ class TAOS_Commerce {
 
     private function __construct() {
         $this->load_dependencies();
+        $this->check_upgrade();
         $this->init_hooks();
     }
 
@@ -49,10 +50,6 @@ class TAOS_Commerce {
     }
 
     private function init_hooks() {
-        register_activation_hook(__FILE__, [$this, 'activate']);
-        register_deactivation_hook(__FILE__, [$this, 'deactivate']);
-
-        add_action('plugins_loaded', [$this, 'check_upgrade'], 5);
         add_action('admin_menu', [$this, 'register_admin_menu']);
         add_action('admin_enqueue_scripts', [$this, 'enqueue_admin_assets']);
         add_action('rest_api_init', [$this, 'register_rest_routes']);
@@ -508,6 +505,17 @@ class TAOS_Commerce {
 function taos_commerce() {
     return TAOS_Commerce::instance();
 }
+
+function taos_commerce_activate() {
+    TAOS_Commerce::instance()->activate();
+}
+
+function taos_commerce_deactivate() {
+    TAOS_Commerce::instance()->deactivate();
+}
+
+register_activation_hook(__FILE__, 'taos_commerce_activate');
+register_deactivation_hook(__FILE__, 'taos_commerce_deactivate');
 
 function taos_commerce_log($message, $context = []) {
     if (!defined('WP_DEBUG') || !WP_DEBUG) {

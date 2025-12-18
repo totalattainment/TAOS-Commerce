@@ -109,7 +109,9 @@ class TAOS_PayPal_Gateway implements TAOS_Gateway_Interface {
                             headers: {"Content-Type": "application/json"},
                             body: JSON.stringify({
                                 course_key: "%s",
-                                gateway: "paypal"
+                                gateway: "paypal",
+                                amount: "%s",
+                                currency: "%s"
                             })
                         })
                         .then(function(res) { return res.json(); })
@@ -157,8 +159,10 @@ class TAOS_PayPal_Gateway implements TAOS_Gateway_Interface {
             esc_attr($course->price),
             esc_attr($course->currency),
             esc_url($sdk_url),
-            esc_js($course->course_key),
             esc_js($create_endpoint),
+            esc_js($course->course_key),
+            esc_js($course->price),
+            esc_js($course->currency),
             esc_js($capture_endpoint),
             esc_js($success_redirect),
             esc_js($container_id)
