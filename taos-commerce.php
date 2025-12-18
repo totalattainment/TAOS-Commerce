@@ -277,17 +277,13 @@ class TAOS_Commerce {
         register_rest_route('taos-commerce/v1', '/create-order', [
             'methods' => 'POST',
             'callback' => [$this, 'create_checkout_order'],
-            'permission_callback' => function() {
-                return is_user_logged_in();
-            }
+            'permission_callback' => '__return_true'
         ]);
 
         register_rest_route('taos-commerce/v1', '/capture-order', [
             'methods' => 'POST',
             'callback' => [$this, 'capture_checkout_order'],
-            'permission_callback' => function() {
-                return is_user_logged_in();
-            }
+            'permission_callback' => '__return_true'
         ]);
     }
 
@@ -358,6 +354,16 @@ class TAOS_Commerce {
         if (!$course || $course->status !== 'active') {
             taos_commerce_log('Checkout attempt for missing/inactive course', ['course_key' => $course_key]);
             return new \WP_Error('course_not_found', 'Course not found or inactive', ['status' => 404]);
+        }
+
+        if (!is_numeric($course->price) || $course->price < 0) {
+            taos_commerce_log('Checkout attempt with invalid price', ['course_key' => $course_key, 'price' => $course->price]);
+            return new \WP_Error('invalid_price', 'Invalid course price', ['status' => 400]);
+        }
+
+        if (empty($course->currency)) {
+            taos_commerce_log('Checkout attempt with missing currency', ['course_key' => $course_key]);
+            return new \WP_Error('invalid_currency', 'Invalid currency', ['status' => 400]);
         }
 
         $gateway = $this->gateway_registry->get($gateway_id);
