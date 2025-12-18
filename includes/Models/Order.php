@@ -152,7 +152,8 @@ class TAOS_Commerce_Order {
         ]);
 
         if (!$result) {
-            return false;
+            self::log_db_error('create', $wpdb->last_error);
+            return new \WP_Error('taos_order_create_failed', __('Failed to create order.', 'taos-commerce'));
         }
 
         return $wpdb->insert_id;
@@ -172,7 +173,13 @@ class TAOS_Commerce_Order {
             $update['gateway_data'] = wp_json_encode($gateway_data);
         }
 
-        return $wpdb->update($table, $update, ['id' => $id]);
+        $result = $wpdb->update($table, $update, ['id' => $id]);
+
+        if ($result === false) {
+            self::log_db_error('update_status', $wpdb->last_error);
+        }
+
+        return $result;
     }
 
     public static function complete_order($id, $transaction_id = null, $gateway_data = null) {
@@ -190,9 +197,20 @@ class TAOS_Commerce_Order {
         $course = TAOS_Commerce_Course::get_by_id($order->course_id);
         if ($course) {
             $entitlements = $course->get_entitlements();
+            if (empty($entitlements) && !empty($course->course_key)) {
+                $entitlements = [$course->course_key];
+            }
             foreach ($entitlements as $entitlement_slug) {
                 taos_grant_entitlement($order->user_id, $entitlement_slug, 'purchase');
             }
+        }
+
+        if (function_exists('taos_commerce_log')) {
+            taos_commerce_log('Order completed', [
+                'order_id' => $id,
+                'course_id' => $order->course_id,
+                'user_id' => $order->user_id
+            ]);
         }
 
         do_action('taos_commerce_order_completed', $order, $course);
@@ -219,5 +237,11 @@ class TAOS_Commerce_Order {
         $order->created_at = $row->created_at;
         $order->updated_at = $row->updated_at;
         return $order;
+    }
+
+    private static function log_db_error($context, $error_message) {
+        if (defined('WP_DEBUG') && WP_DEBUG) {
+            error_log(sprintf('[TAOS Commerce][Order %s] %s', $context, $error_message));
+        }
     }
 }
