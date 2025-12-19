@@ -231,7 +231,7 @@ class TAOS_Commerce_Course {
         $table = self::get_table_name();
         $entitlements_table = self::get_entitlements_table();
 
-        $wpdb->delete($entitlements_table, ['course_id' => $id]);
+        $wpdb->delete($entitlements_table, ['course_id' => $id, 'user_id' => 0]);
         return $wpdb->delete($table, ['id' => $id]);
     }
 
@@ -240,8 +240,9 @@ class TAOS_Commerce_Course {
         $table = self::get_entitlements_table();
 
         return $wpdb->get_col($wpdb->prepare(
-            "SELECT entitlement_slug FROM $table WHERE course_id = %d",
-            $this->id
+            "SELECT entitlement_slug FROM $table WHERE course_id = %d AND user_id = %d",
+            $this->id,
+            0
         ));
     }
 
@@ -249,12 +250,13 @@ class TAOS_Commerce_Course {
         global $wpdb;
         $table = self::get_entitlements_table();
 
-        $wpdb->delete($table, ['course_id' => $course_id]);
+        $wpdb->delete($table, ['course_id' => $course_id, 'user_id' => 0]);
 
         $sanitized = array_unique(array_filter(array_map('sanitize_key', (array) $entitlements)));
 
         foreach ($sanitized as $slug) {
             $wpdb->insert($table, [
+                'user_id' => 0,
                 'course_id' => $course_id,
                 'entitlement_slug' => sanitize_key($slug)
             ]);
