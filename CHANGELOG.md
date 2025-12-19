@@ -1,5 +1,15 @@
 # TA-OS Commerce Changelog
 
+## [1.2.3] - 2025-05-15
+
+### Changed
+- Fix checkout user context binding
+
+## [1.2.2] - 2025-05-15
+
+### Changed
+- Commerce now sells TAOS Courses (no standalone courses)
+
 ## [1.0.1] - 2024-12-12
 
 ### Changed

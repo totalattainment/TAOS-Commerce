@@ -1,16 +1,16 @@
 # TA-OS Commerce
 
-**Version 1.2.1** - Modular payments system for TA-OS. Gateway-agnostic with PayPal support.
+**Version 1.2.2** - Modular payments system for TA-OS. Gateway-agnostic with PayPal support.
 
 ## Overview
 
-TA-OS Commerce is a companion plugin that adds payment processing to the Total Attainment Operating System. It follows a WooCommerce-like admin experience with configurable gateways, courses, and pricing.
+TA-OS Commerce is a companion plugin that adds payment processing to the Total Attainment Operating System. It links pricing and checkout to existing TAOS courses instead of creating standalone course records.
 
 ## Features
 
 - **Gateway-Agnostic Architecture** - Add new payment gateways without code changes
 - **PayPal Integration** - Ready-to-use PayPal checkout with sandbox support
-- **Admin-Configurable Courses** - Set prices, currencies, and entitlements via admin UI
+- **TAOS Course Linking** - Attach prices, currencies, and entitlements to existing TAOS courses via admin UI
 - **Bundle Support** - One course can grant multiple entitlements
 - **Order History** - Track all payments with transaction details
 - **TA-OS Integration** - Automatically grants entitlements on successful payment
@@ -41,16 +41,14 @@ TA-OS Commerce is a companion plugin that adds payment processing to the Total A
 5. Toggle Sandbox Mode for testing
 6. Save Changes
 
-### 2. Create Courses
+### 2. Link TAOS Courses
 
 1. Go to **Commerce → Courses**
-2. Click **Add New**
-3. Fill in:
-   - **Course Key** - Unique identifier (e.g., `level_1`)
-   - **Name** - Display name
-   - **Price** - Amount in your currency
-   - **Enabled Gateways** - Check PayPal (or other configured gateways)
-   - **Entitlements** - Slugs to grant on purchase (one per line)
+2. Click **Link TAOS Course**
+3. Choose a published TAOS course with live commerce visibility and set:
+   - **Price** and **Currency**
+   - **Enabled Gateways**
+   - Optional additional entitlements
 4. Save
 
 ### 3. View Orders
