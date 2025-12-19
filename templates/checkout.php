@@ -6,11 +6,11 @@ if (!defined('ABSPATH')) {
 
 get_header();
 
-$course_key = $GLOBALS['taos_commerce_checkout_course_key'] ?? '';
+$course_id = $GLOBALS['taos_commerce_checkout_course_id'] ?? '';
 ?>
 
 <main class="taos-commerce-checkout-page">
-    <?php echo taos_commerce()->render_checkout_shortcode(['course' => $course_key]); ?>
+    <?php echo taos_commerce()->render_checkout_shortcode(['course_id' => $course_id]); ?>
 </main>
 
 <?php get_footer();

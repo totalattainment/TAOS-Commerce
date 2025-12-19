@@ -193,16 +193,23 @@ class TAOS_Commerce_Order {
         }
 
         self::update_status($id, self::STATUS_COMPLETED, $transaction_id, $gateway_data);
+        if ($order->user_id === 0) {
+            return true;
+        }
 
-        $course = TAOS_Commerce_Course::get_by_id($order->course_id);
+        $course = TAOS_Commerce_Course::get_by_course_id($order->course_id);
         if ($course) {
             $entitlements = $course->get_entitlements();
-            if (empty($entitlements) && !empty($course->course_key)) {
-                $entitlements = [$course->course_key];
+
+            if (empty($entitlements)) {
+                $entitlements = [$course->course_id];
             }
+
             foreach ($entitlements as $entitlement_slug) {
                 taos_grant_entitlement($order->user_id, $entitlement_slug, 'purchase');
             }
+        } else {
+            taos_grant_entitlement($order->user_id, $order->course_id, 'purchase');
         }
 
         if (function_exists('taos_commerce_log')) {

@@ -38,7 +38,7 @@ class TAOS_Admin_Courses_Page {
         <div class="wrap taos-commerce-wrap">
             <h1 class="wp-heading-inline"><?php _e('Courses', 'taos-commerce'); ?></h1>
             <a href="<?php echo esc_url(admin_url('admin.php?page=taos-commerce-courses&action=add')); ?>" class="page-title-action">
-                <?php _e('Add New', 'taos-commerce'); ?>
+                <?php _e('Link TAOS Course', 'taos-commerce'); ?>
             </a>
             <hr class="wp-header-end">
 
@@ -58,7 +58,8 @@ class TAOS_Admin_Courses_Page {
                 <thead>
                     <tr>
                         <th><?php _e('Course', 'taos-commerce'); ?></th>
-                        <th><?php _e('Key', 'taos-commerce'); ?></th>
+                        <th><?php _e('Course ID', 'taos-commerce'); ?></th>
+                        <th><?php _e('Course Code', 'taos-commerce'); ?></th>
                         <th><?php _e('Price', 'taos-commerce'); ?></th>
                         <th><?php _e('Type', 'taos-commerce'); ?></th>
                         <th><?php _e('Gateways', 'taos-commerce'); ?></th>
@@ -72,14 +73,16 @@ class TAOS_Admin_Courses_Page {
                             <td colspan="7"><?php _e('No courses found.', 'taos-commerce'); ?></td>
                         </tr>
                     <?php else: ?>
-                        <?php foreach ($courses as $course): 
+                        <?php foreach ($courses as $course):
                             $enabled_gateways = json_decode($course->enabled_gateways, true) ?: [];
+                            $taos_course = $course->get_taos_course_data();
                         ?>
                         <tr>
                             <td>
-                                <strong><?php echo esc_html($course->name); ?></strong>
+                                <strong><?php echo esc_html($course->get_title()); ?></strong>
                             </td>
-                            <td><code><?php echo esc_html($course->course_key); ?></code></td>
+                            <td><code><?php echo esc_html($course->course_id); ?></code></td>
+                            <td><?php echo esc_html($course->get_course_code() ?: '—'); ?></td>
                             <td>
                                 <?php if ($course->payment_type === 'free'): ?>
                                     <?php _e('Free', 'taos-commerce'); ?>
@@ -99,6 +102,9 @@ class TAOS_Admin_Courses_Page {
                                 <span class="taos-badge taos-badge-<?php echo esc_attr($course->status); ?>">
                                     <?php echo esc_html(ucfirst($course->status)); ?>
                                 </span>
+                                <?php if (!$taos_course || !TAOS_Commerce_Course::is_course_purchasable($taos_course)): ?>
+                                    <br><small><?php _e('Not purchasable in TAOS', 'taos-commerce'); ?></small>
+                                <?php endif; ?>
                             </td>
                             <td>
                                 <a href="<?php echo esc_url(admin_url('admin.php?page=taos-commerce-courses&action=edit&course_id=' . $course->id)); ?>" class="button button-small">
@@ -128,19 +134,37 @@ class TAOS_Admin_Courses_Page {
         $course = $course_id ? TAOS_Commerce_Course::get_by_id($course_id) : null;
         $entitlements = $course ? $course->get_entitlements() : [];
         $enabled_gateways = $course ? (json_decode($course->enabled_gateways, true) ?: []) : [];
+        $selected_course_id = $course ? $course->course_id : 0;
 
         if ($posted_data) {
+            $selected_course_id = intval($posted_data['taos_course_id'] ?? $selected_course_id);
             $course = (object) array_merge(
                 $course ? get_object_vars($course) : [],
-                $posted_data
+                [
+                    'payment_type' => $posted_data['payment_type'] ?? ($course->payment_type ?? 'paid'),
+                    'price' => $posted_data['price'] ?? ($course->price ?? 0),
+                    'currency' => $posted_data['currency'] ?? ($course->currency ?? 'GBP'),
+                    'status' => $posted_data['status'] ?? ($course->status ?? 'active')
+                ]
             );
             $entitlements = array_filter(array_map('trim', explode("\n", $posted_data['entitlements'] ?? '')));
             $enabled_gateways = isset($posted_data['enabled_gateways']) ? (array) $posted_data['enabled_gateways'] : $enabled_gateways;
         }
+
+        if (!$course) {
+            $course = (object) [
+                'payment_type' => 'paid',
+                'price' => 0,
+                'currency' => 'GBP',
+                'status' => 'active'
+            ];
+        }
         $all_gateways = $this->gateway_registry->get_all();
-        
+        $course_options = TAOS_Commerce_Course::get_taos_courses();
+        $selected_course = $selected_course_id ? TAOS_Commerce_Course::get_taos_course($selected_course_id) : null;
+
         $is_edit = $course_id > 0;
-        $page_title = $is_edit ? __('Edit Course', 'taos-commerce') : __('Add New Course', 'taos-commerce');
+        $page_title = $is_edit ? __('Edit Linked Course', 'taos-commerce') : __('Link TAOS Course', 'taos-commerce');
         ?>
         <div class="wrap taos-commerce-wrap">
             <h1><?php echo esc_html($page_title); ?></h1>
@@ -153,38 +177,32 @@ class TAOS_Admin_Courses_Page {
 
             <form method="post" action="">
                 <?php wp_nonce_field('taos_commerce_save_course', 'taos_commerce_nonce'); ?>
-                <input type="hidden" name="course_id" value="<?php echo esc_attr($course_id); ?>">
+                <input type="hidden" name="product_id" value="<?php echo esc_attr($course_id); ?>">
 
                 <table class="form-table">
                     <tr>
                         <th scope="row">
-                            <label for="course_key"><?php _e('Course Key', 'taos-commerce'); ?></label>
+                            <label for="taos_course_id"><?php _e('TAOS Course', 'taos-commerce'); ?></label>
                         </th>
                         <td>
-                            <input type="text" id="course_key" name="course_key" 
-                                   value="<?php echo esc_attr($course->course_key ?? ''); ?>"
-                                   class="regular-text" 
-                                   <?php echo $is_edit ? 'readonly' : 'required'; ?>>
-                            <p class="description"><?php _e('Unique identifier (e.g., level_1, premium_bundle). Cannot be changed after creation.', 'taos-commerce'); ?></p>
-                        </td>
-                    </tr>
-                    <tr>
-                        <th scope="row">
-                            <label for="name"><?php _e('Course Name', 'taos-commerce'); ?></label>
-                        </th>
-                        <td>
-                            <input type="text" id="name" name="name" 
-                                   value="<?php echo esc_attr($course->name ?? ''); ?>"
-                                   class="regular-text" required>
-                        </td>
-                    </tr>
-                    <tr>
-                        <th scope="row">
-                            <label for="description"><?php _e('Description', 'taos-commerce'); ?></label>
-                        </th>
-                        <td>
-                            <textarea id="description" name="description" 
-                                      rows="3" class="large-text"><?php echo esc_textarea($course->description ?? ''); ?></textarea>
+                            <select id="taos_course_id" name="taos_course_id" class="regular-text" <?php echo empty($course_options) ? 'disabled' : ''; ?>>
+                                <option value=""><?php _e('Select a course', 'taos-commerce'); ?></option>
+                                <?php foreach ($course_options as $option): ?>
+                                    <option value="<?php echo esc_attr($option['id']); ?>" <?php selected($selected_course_id, $option['id']); ?>>
+                                        <?php echo esc_html($option['title']); ?><?php echo $option['course_code'] ? ' (' . esc_html($option['course_code']) . ')' : ''; ?>
+                                    </option>
+                                <?php endforeach; ?>
+                            </select>
+                            <?php if ($is_edit && $selected_course_id): ?>
+                                <input type="hidden" name="taos_course_id" value="<?php echo esc_attr($selected_course_id); ?>">
+                            <?php endif; ?>
+                            <p class="description"><?php _e('Only published, purchasable courses with live commerce visibility are listed.', 'taos-commerce'); ?></p>
+                            <?php if ($selected_course): ?>
+                                <p class="description">
+                                    <strong><?php _e('Course Code:', 'taos-commerce'); ?></strong> <?php echo esc_html($selected_course['course_code'] ?: __('N/A', 'taos-commerce')); ?><br>
+                                    <strong><?php _e('Slug:', 'taos-commerce'); ?></strong> <?php echo esc_html($selected_course['slug']); ?>
+                                </p>
+                            <?php endif; ?>
                         </td>
                     </tr>
                     <tr>
@@ -233,9 +251,9 @@ class TAOS_Admin_Courses_Page {
                             <label for="entitlements"><?php _e('Entitlements', 'taos-commerce'); ?></label>
                         </th>
                         <td>
-                            <textarea id="entitlements" name="entitlements" 
+                            <textarea id="entitlements" name="entitlements"
                                       rows="3" class="large-text"><?php echo esc_textarea(implode("\n", $entitlements)); ?></textarea>
-                            <p class="description"><?php _e('One entitlement slug per line. These are granted to users upon purchase.', 'taos-commerce'); ?></p>
+                            <p class="description"><?php _e('Optional: one entitlement per line. Use TAOS course IDs when possible.', 'taos-commerce'); ?></p>
                         </td>
                     </tr>
                     <tr>
@@ -253,7 +271,7 @@ class TAOS_Admin_Courses_Page {
 
                 <p class="submit">
                     <button type="submit" name="save_course" class="button button-primary">
-                        <?php echo $is_edit ? __('Update Course', 'taos-commerce') : __('Add Course', 'taos-commerce'); ?>
+                        <?php echo $is_edit ? __('Update Listing', 'taos-commerce') : __('Save Listing', 'taos-commerce'); ?>
                     </button>
                     <a href="<?php echo esc_url(admin_url('admin.php?page=taos-commerce-courses')); ?>" class="button">
                         <?php _e('Cancel', 'taos-commerce'); ?>
@@ -287,14 +305,18 @@ class TAOS_Admin_Courses_Page {
             wp_die(__('Security check failed.', 'taos-commerce'));
         }
 
-        $course_id = intval($_POST['course_id'] ?? 0);
+        $product_id = intval($_POST['product_id'] ?? 0);
+        $taos_course_id = intval($_POST['taos_course_id'] ?? 0);
         $entitlements_text = $_POST['entitlements'] ?? '';
         $entitlements = array_filter(array_map('trim', explode("\n", $entitlements_text)));
 
+        if (!$taos_course_id) {
+            return new WP_Error('taos_course_validation', __('Please select a TAOS course to sell.', 'taos-commerce'));
+        }
+
         $data = [
-            'course_key' => sanitize_key($_POST['course_key']),
-            'name' => sanitize_text_field($_POST['name']),
-            'description' => sanitize_textarea_field($_POST['description']),
+            'course_id' => $taos_course_id,
+            'course_key' => $taos_course_id,
             'payment_type' => sanitize_text_field($_POST['payment_type']),
             'price' => floatval($_POST['price']),
             'currency' => sanitize_text_field($_POST['currency']),
@@ -303,28 +325,20 @@ class TAOS_Admin_Courses_Page {
             'entitlements' => $entitlements
         ];
 
-        if (empty($data['course_key']) || empty($data['name'])) {
-            return new WP_Error('taos_course_validation', __('Course key and name are required.', 'taos-commerce'));
-        }
-
         if ($data['payment_type'] === 'free') {
             $data['price'] = 0;
         }
 
-        if (!in_array($data['course_key'], $data['entitlements'], true)) {
-            $data['entitlements'][] = $data['course_key'];
-        }
-
-        if ($course_id) {
-            $existing = TAOS_Commerce_Course::get_by_id($course_id);
+        if ($product_id) {
+            $existing = TAOS_Commerce_Course::get_by_id($product_id);
             if (!$existing) {
                 return new WP_Error('taos_course_missing', __('Course not found.', 'taos-commerce'));
             }
 
-            $result = TAOS_Commerce_Course::update($course_id, $data);
+            $result = TAOS_Commerce_Course::update($product_id, $data);
         } else {
-            if (TAOS_Commerce_Course::get_by_key($data['course_key'])) {
-                return new WP_Error('taos_course_exists', __('A course with this key already exists.', 'taos-commerce'));
+            if (TAOS_Commerce_Course::get_by_course_id($taos_course_id)) {
+                return new WP_Error('taos_course_exists', __('This TAOS course is already linked in Commerce.', 'taos-commerce'));
             }
 
             $result = TAOS_Commerce_Course::create($data);

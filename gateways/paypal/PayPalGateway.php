@@ -90,13 +90,13 @@ class TAOS_PayPal_Gateway implements TAOS_Gateway_Interface {
         $sdk_url .= '?client-id=' . urlencode($this->get_client_id());
         $sdk_url .= '&currency=' . urlencode($course->currency);
 
-        $container_id = 'paypal-button-' . $course->course_key;
+        $container_id = 'paypal-button-' . $course->course_id;
         $create_endpoint = esc_url_raw(rest_url('taos-commerce/v1/create-order'));
         $capture_endpoint = esc_url_raw(rest_url('taos-commerce/v1/capture-order'));
         $success_redirect = esc_url_raw(home_url('/dashboard/?payment=success'));
 
         return sprintf(
-            '<div id="%s" class="taos-paypal-button" data-course="%s" data-amount="%s" data-currency="%s"></div>
+            '<div id="%s" class="taos-paypal-button" data-course-id="%s" data-amount="%s" data-currency="%s"></div>
             <script src="%s"></script>
             <script>
             (function() {
@@ -108,7 +108,7 @@ class TAOS_PayPal_Gateway implements TAOS_Gateway_Interface {
                             credentials: "same-origin",
                             headers: {"Content-Type": "application/json"},
                             body: JSON.stringify({
-                                course_key: "%s",
+                                course_id: "%s",
                                 gateway: "paypal",
                                 amount: "%s",
                                 currency: "%s"
@@ -155,12 +155,12 @@ class TAOS_PayPal_Gateway implements TAOS_Gateway_Interface {
             })();
             </script>',
             esc_attr($container_id),
-            esc_attr($course->course_key),
+            esc_attr($course->course_id),
             esc_attr($course->price),
             esc_attr($course->currency),
             esc_url($sdk_url),
             esc_js($create_endpoint),
-            esc_js($course->course_key),
+            esc_js($course->course_id),
             esc_js($course->price),
             esc_js($course->currency),
             esc_js($capture_endpoint),
@@ -177,7 +177,7 @@ class TAOS_PayPal_Gateway implements TAOS_Gateway_Interface {
 
         $order_id = TAOS_Commerce_Order::create([
             'user_id' => $user_id,
-            'course_id' => $course->id,
+            'course_id' => $course->course_id,
             'gateway' => 'paypal',
             'amount' => $course->price,
             'currency' => $course->currency,
@@ -206,7 +206,7 @@ class TAOS_PayPal_Gateway implements TAOS_Gateway_Interface {
                 'purchase_units' => [
                     [
                         'reference_id' => (string)$order_id,
-                        'description' => $course->name,
+                        'description' => $course->get_title(),
                         'amount' => [
                             'currency_code' => $course->currency,
                             'value' => number_format($course->price, 2, '.', '')
@@ -273,17 +273,6 @@ class TAOS_PayPal_Gateway implements TAOS_Gateway_Interface {
 
         if (($body['status'] ?? '') !== 'COMPLETED') {
             return new \WP_Error('not_completed', 'Payment not completed');
-        }
-
-        $order = TAOS_Commerce_Order::get_by_transaction_id($paypal_order_id);
-
-        if ($order && !empty($order->user_id)) {
-            $course = TAOS_Commerce_Course::get_by_id($order->course_id);
-            $course_key = $course->course_key ?? '';
-
-            if (!empty($course_key)) {
-                taos_grant_entitlement($order->user_id, $course_key, 'purchase');
-            }
         }
 
         return $body;

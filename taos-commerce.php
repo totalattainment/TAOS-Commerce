@@ -3,7 +3,7 @@
  * Plugin Name: TA-OS Commerce
  * Plugin URI: https://totalattainment.co.uk
  * Description: Modular payments system for TA-OS. Gateway-agnostic with PayPal support. Admin-configurable courses, prices, and entitlements.
- * Version: 1.2.1
+ * Version: 1.2.2
  * Author: Total Attainment
  * Author URI: https://totalattainment.co.uk
  * Text Domain: taos-commerce
@@ -14,7 +14,7 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
-define('TAOS_COMMERCE_VERSION', '1.2.1');
+define('TAOS_COMMERCE_VERSION', '1.2.2');
 define('TAOS_COMMERCE_PATH', plugin_dir_path(__FILE__));
 define('TAOS_COMMERCE_URL', plugin_dir_url(__FILE__));
 
@@ -100,8 +100,9 @@ class TAOS_Commerce {
 
         $sql = "CREATE TABLE $courses_table (
             id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
-            course_key varchar(100) NOT NULL,
-            name varchar(255) NOT NULL,
+            course_id bigint(20) unsigned NOT NULL DEFAULT 0,
+            course_key varchar(100) NOT NULL DEFAULT '',
+            name varchar(255) NOT NULL DEFAULT '',
             description text,
             price decimal(10,2) NOT NULL DEFAULT 0.00,
             currency varchar(3) NOT NULL DEFAULT 'GBP',
@@ -111,6 +112,7 @@ class TAOS_Commerce {
             created_at datetime DEFAULT CURRENT_TIMESTAMP,
             updated_at datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
             PRIMARY KEY (id),
+            KEY course_id (course_id),
             UNIQUE KEY course_key (course_key)
         ) $charset_collate;
 
@@ -244,13 +246,17 @@ class TAOS_Commerce {
 
     public function render_checkout_shortcode($atts = []) {
         $atts = shortcode_atts([
+            'course_id' => '',
             'course' => ''
         ], $atts);
 
-        $course_key = sanitize_key($atts['course'] ?: ($_GET['course'] ?? ''));
+        $identifier = $atts['course_id'] ?: ($atts['course'] ?: ($_GET['course_id'] ?? ($_GET['course'] ?? '')));
+        $course_identifier = is_numeric($identifier)
+            ? intval($identifier)
+            : sanitize_text_field($identifier);
 
         ob_start();
-        echo $this->get_checkout_markup($course_key);
+        echo $this->get_checkout_markup($course_identifier);
         return ob_get_clean();
     }
 
@@ -301,6 +307,7 @@ class TAOS_Commerce {
     public function register_query_vars($vars) {
         $vars[] = 'taos_commerce_checkout';
         $vars[] = 'course';
+        $vars[] = 'course_id';
         return $vars;
     }
 
@@ -314,16 +321,25 @@ class TAOS_Commerce {
             return $template;
         }
 
-        $course_key = sanitize_key(get_query_var('course'));
-        $course = $course_key ? TAOS_Commerce_Course::get_by_key($course_key) : null;
+        $course_identifier = get_query_var('course_id');
+
+        if (!$course_identifier) {
+            $course_identifier = get_query_var('course');
+        }
+
+        $course_identifier = is_numeric($course_identifier)
+            ? intval($course_identifier)
+            : sanitize_text_field($course_identifier);
+
+        $course = $course_identifier ? TAOS_Commerce_Course::resolve_course($course_identifier) : null;
 
         if (!$course) {
             status_header(404);
-            taos_commerce_log('Checkout course not found', ['course_key' => $course_key]);
+            taos_commerce_log('Checkout course not found', ['course_identifier' => $course_identifier]);
         }
 
         $GLOBALS['taos_commerce_checkout_course'] = $course;
-        $GLOBALS['taos_commerce_checkout_course_key'] = $course_key;
+        $GLOBALS['taos_commerce_checkout_course_id'] = $course_identifier;
 
         $template_path = TAOS_COMMERCE_PATH . 'templates/checkout.php';
         if (file_exists($template_path)) {
@@ -343,26 +359,42 @@ class TAOS_Commerce {
     }
 
     public function create_checkout_order(\WP_REST_Request $request) {
-        $course_key = sanitize_text_field($request->get_param('course_key'));
+        $course_identifier = $request->get_param('course_id');
+        if (!$course_identifier) {
+            $course_identifier = $request->get_param('course');
+        }
+
+        if (!$course_identifier) {
+            $course_identifier = $request->get_param('course_key');
+        }
+
         $gateway_id = sanitize_text_field($request->get_param('gateway'));
 
-        if (empty($course_key) || empty($gateway_id)) {
+        if (empty($course_identifier) || empty($gateway_id)) {
             return new \WP_Error('missing_params', 'Missing required parameters', ['status' => 400]);
         }
 
-        $course = TAOS_Commerce_Course::get_by_key($course_key);
+        $course_lookup = is_numeric($course_identifier) ? intval($course_identifier) : sanitize_text_field($course_identifier);
+
+        $course = TAOS_Commerce_Course::resolve_course($course_lookup);
         if (!$course || $course->status !== 'active') {
-            taos_commerce_log('Checkout attempt for missing/inactive course', ['course_key' => $course_key]);
+            taos_commerce_log('Checkout attempt for missing/inactive course', ['course_identifier' => $course_lookup]);
             return new \WP_Error('course_not_found', 'Course not found or inactive', ['status' => 404]);
         }
 
+        $taos_course = $course->get_taos_course_data();
+        if (!$taos_course || !TAOS_Commerce_Course::is_course_purchasable($taos_course)) {
+            taos_commerce_log('Checkout attempt for unavailable TAOS course', ['course_id' => $course->course_id]);
+            return new \WP_Error('course_not_purchasable', 'Course cannot be purchased', ['status' => 400]);
+        }
+
         if (!is_numeric($course->price) || $course->price < 0) {
-            taos_commerce_log('Checkout attempt with invalid price', ['course_key' => $course_key, 'price' => $course->price]);
+            taos_commerce_log('Checkout attempt with invalid price', ['course_id' => $course->course_id, 'price' => $course->price]);
             return new \WP_Error('invalid_price', 'Invalid course price', ['status' => 400]);
         }
 
         if (empty($course->currency)) {
-            taos_commerce_log('Checkout attempt with missing currency', ['course_key' => $course_key]);
+            taos_commerce_log('Checkout attempt with missing currency', ['course_id' => $course->course_id]);
             return new \WP_Error('invalid_currency', 'Invalid currency', ['status' => 400]);
         }
 
@@ -442,16 +474,23 @@ class TAOS_Commerce {
         return ['success' => true, 'message' => 'Payment completed successfully'];
     }
 
-    private function get_checkout_markup($course_key) {
-        $course = $course_key ? TAOS_Commerce_Course::get_by_key($course_key) : null;
+    private function get_checkout_markup($course_identifier) {
+        $course = $course_identifier ? TAOS_Commerce_Course::resolve_course($course_identifier) : null;
 
         if (!$course) {
-            taos_commerce_log('Checkout attempted without valid course', ['course_key' => $course_key]);
+            taos_commerce_log('Checkout attempted without valid course', ['course_identifier' => $course_identifier]);
             return '<div class="taos-checkout-error">' . esc_html__('Course not found.', 'taos-commerce') . '</div>';
         }
 
-        if ($course->status !== 'active') {
-            taos_commerce_log('Inactive course requested at checkout', ['course_key' => $course_key]);
+        $taos_course = $course->get_taos_course_data();
+
+        if (!$taos_course) {
+            taos_commerce_log('TAOS course missing for checkout', ['course_id' => $course->course_id]);
+            return '<div class="taos-checkout-error">' . esc_html__('Course not found.', 'taos-commerce') . '</div>';
+        }
+
+        if (!$course->is_available()) {
+            taos_commerce_log('Inactive course requested at checkout', ['course_id' => $course->course_id]);
             return '<div class="taos-checkout-error">' . esc_html__('This course is currently unavailable.', 'taos-commerce') . '</div>';
         }
 
@@ -459,21 +498,24 @@ class TAOS_Commerce {
             ? esc_html__('Free', 'taos-commerce')
             : esc_html($course->currency . ' ' . number_format($course->price, 2));
 
-        $button = taos_commerce_get_purchase_button($course->course_key);
+        $button = taos_commerce_get_purchase_button($course->course_id);
 
         if (empty($button)) {
-            taos_commerce_log('Checkout button could not be rendered', ['course_key' => $course_key]);
+            taos_commerce_log('Checkout button could not be rendered', ['course_id' => $course->course_id]);
             $button = '<div class="taos-checkout-error">' . esc_html__('Checkout is unavailable for this course.', 'taos-commerce') . '</div>';
         }
+
+        $course_title = $course->get_title();
+        $course_code = $course->get_course_code();
 
         ob_start();
         ?>
         <div class="taos-checkout-wrapper">
             <h1 class="taos-checkout-title"><?php esc_html_e('Checkout', 'taos-commerce'); ?></h1>
             <div class="taos-checkout-course">
-                <h2><?php echo esc_html($course->name); ?></h2>
-                <?php if (!empty($course->description)): ?>
-                    <p class="taos-checkout-description"><?php echo esc_html($course->description); ?></p>
+                <h2><?php echo esc_html($course_title); ?></h2>
+                <?php if (!empty($course_code)): ?>
+                    <p class="taos-checkout-description"><strong><?php esc_html_e('Course Code:', 'taos-commerce'); ?></strong> <?php echo esc_html($course_code); ?></p>
                 <?php endif; ?>
                 <p class="taos-checkout-price">
                     <strong><?php esc_html_e('Price:', 'taos-commerce'); ?></strong> <?php echo $price_display; ?>
@@ -491,18 +533,60 @@ class TAOS_Commerce {
         return $this->gateway_registry;
     }
 
-    public static function grant_entitlement($user_id, $entitlement_slug, $source = 'purchase') {
-        $current = get_user_meta($user_id, 'ta_courses', true);
-        if (!is_array($current)) {
-            $current = [];
+    public static function grant_entitlement($user_id, $course_id, $source = 'purchase') {
+        $numeric_course_id = is_numeric($course_id) ? intval($course_id) : 0;
+
+        if (empty($user_id)) {
+            return false;
         }
 
-        if (!in_array($entitlement_slug, $current)) {
-            $current[] = $entitlement_slug;
-            update_user_meta($user_id, 'ta_courses', $current);
+        if ($numeric_course_id > 0) {
+            $meta_key = 'ta_course_ids';
+            $current = get_user_meta($user_id, $meta_key, true);
+            if (!is_array($current)) {
+                $current = [];
+            }
+
+            if (!in_array($numeric_course_id, $current, true)) {
+                $current[] = $numeric_course_id;
+                update_user_meta($user_id, $meta_key, $current);
+            }
+
+            $course = TAOS_Commerce_Course::get_by_course_id($numeric_course_id);
+            $course_slug = $course ? $course->get_slug() : '';
+            if (!empty($course_slug)) {
+                $legacy_entitlements = get_user_meta($user_id, 'ta_courses', true);
+                if (!is_array($legacy_entitlements)) {
+                    $legacy_entitlements = [];
+                }
+
+                if (!in_array($course_slug, $legacy_entitlements, true)) {
+                    $legacy_entitlements[] = $course_slug;
+                    update_user_meta($user_id, 'ta_courses', $legacy_entitlements);
+                }
+            }
+
+            do_action('taos_entitlement_granted', $user_id, $numeric_course_id, $source);
+
+            return true;
         }
 
-        do_action('taos_entitlement_granted', $user_id, $entitlement_slug, $source);
+        $legacy_slug = sanitize_key((string) $course_id);
+        if (empty($legacy_slug)) {
+            return false;
+        }
+
+        $legacy_entitlements = get_user_meta($user_id, 'ta_courses', true);
+        if (!is_array($legacy_entitlements)) {
+            $legacy_entitlements = [];
+        }
+
+        if (!in_array($legacy_slug, $legacy_entitlements, true)) {
+            $legacy_entitlements[] = $legacy_slug;
+            update_user_meta($user_id, 'ta_courses', $legacy_entitlements);
+        }
+
+        do_action('taos_entitlement_granted', $user_id, $legacy_slug, $source);
 
         return true;
     }
@@ -539,20 +623,20 @@ function taos_commerce_log($message, $context = []) {
     error_log('[TAOS Commerce] ' . $message);
 }
 
-function taos_grant_entitlement($user_id, $entitlement_slug, $source = 'purchase') {
-    return TAOS_Commerce::grant_entitlement($user_id, $entitlement_slug, $source);
+function taos_grant_entitlement($user_id, $course_id, $source = 'purchase') {
+    return TAOS_Commerce::grant_entitlement($user_id, $course_id, $source);
 }
 
-function taos_commerce_get_purchase_button($course_key, $button_text = 'Buy Now') {
-    $course = TAOS_Commerce_Course::get_by_key($course_key);
-    if (!$course || $course->status !== 'active') {
+function taos_commerce_get_purchase_button($course_identifier, $button_text = 'Buy Now') {
+    $course = TAOS_Commerce_Course::resolve_course($course_identifier);
+    if (!$course || !$course->is_available()) {
         return '';
     }
 
     if ($course->payment_type === 'free') {
         return sprintf(
-            '<button class="taos-purchase-btn taos-free-btn" data-course="%s">%s</button>',
-            esc_attr($course_key),
+            '<button class="taos-purchase-btn taos-free-btn" data-course-id="%s">%s</button>',
+            esc_attr($course->course_id),
             esc_html__('Enroll Free', 'taos-commerce')
         );
     }

@@ -34,9 +34,9 @@ class TAOS_Admin_Orders_Page {
                             <td colspan="7"><?php _e('No orders found.', 'taos-commerce'); ?></td>
                         </tr>
                     <?php else: ?>
-                        <?php foreach ($orders as $order): 
+                        <?php foreach ($orders as $order):
                             $user = get_userdata($order->user_id);
-                            $course = TAOS_Commerce_Course::get_by_id($order->course_id);
+                            $course = TAOS_Commerce_Course::get_by_course_id($order->course_id);
                         ?>
                         <tr>
                             <td>
@@ -54,7 +54,7 @@ class TAOS_Admin_Orders_Page {
                                 <?php endif; ?>
                             </td>
                             <td>
-                                <?php echo $course ? esc_html($course->name) : __('Course not found', 'taos-commerce'); ?>
+                                <?php echo $course ? esc_html($course->get_title()) : __('Course not found', 'taos-commerce'); ?>
                             </td>
                             <td>
                                 <?php echo esc_html($order->currency . ' ' . number_format($order->amount, 2)); ?>
