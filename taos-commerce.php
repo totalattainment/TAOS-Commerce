@@ -170,6 +170,25 @@ class TAOS_Commerce {
         if (!empty($missing)) {
             taos_commerce_log('Missing commerce tables; attempting to recreate.', ['tables' => $missing]);
             $this->create_tables();
+            return;
+        }
+
+        $entitlements_table = $wpdb->prefix . 'taos_commerce_course_entitlements';
+        $user_id_column = $wpdb->get_var($wpdb->prepare(
+            "SHOW COLUMNS FROM $entitlements_table LIKE %s",
+            'user_id'
+        ));
+        $user_course_index = $wpdb->get_var($wpdb->prepare(
+            "SHOW INDEX FROM $entitlements_table WHERE Key_name = %s",
+            'idx_user_course'
+        ));
+
+        if (empty($user_id_column) || empty($user_course_index)) {
+            taos_commerce_log('Commerce entitlements schema missing columns or indexes; attempting to recreate.', [
+                'missing_user_id' => empty($user_id_column),
+                'missing_user_course_index' => empty($user_course_index)
+            ]);
+            $this->create_tables();
         }
     }
 
@@ -564,7 +583,7 @@ class TAOS_Commerce {
 
     private function store_user_entitlement($order) {
         $current_user_id = get_current_user_id();
-        if (empty($current_user_id)) {
+        if ($current_user_id === 0) {
             if (function_exists('taos_commerce_log')) {
                 taos_commerce_log('Entitlement insert failed: missing user_id', [
                     'order_id' => $order ? $order->id : null
