@@ -91,8 +91,9 @@ class TAOS_PayPal_Gateway implements TAOS_Gateway_Interface {
         $sdk_url .= '&currency=' . urlencode($course->currency);
 
         $container_id = 'paypal-button-' . $course->course_id;
-        $create_endpoint = esc_url_raw(rest_url('taos-commerce/v1/create-order'));
-        $capture_endpoint = esc_url_raw(rest_url('taos-commerce/v1/capture-order'));
+        $checkout_base = home_url('/checkout/');
+        $create_endpoint = esc_url_raw(add_query_arg('taos_commerce_action', 'create_order', $checkout_base));
+        $capture_endpoint = esc_url_raw(add_query_arg('taos_commerce_action', 'capture_order', $checkout_base));
         $success_redirect = esc_url_raw(home_url('/dashboard/?payment=success'));
 
         return sprintf(

@@ -3,7 +3,7 @@
  * Plugin Name: TA-OS Commerce
  * Plugin URI: https://totalattainment.co.uk
  * Description: Modular payments system for TA-OS. Gateway-agnostic with PayPal support. Admin-configurable courses, prices, and entitlements.
- * Version: 1.2.2
+ * Version: 1.2.3
  * Author: Total Attainment
  * Author URI: https://totalattainment.co.uk
  * Text Domain: taos-commerce
@@ -14,7 +14,7 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
-define('TAOS_COMMERCE_VERSION', '1.2.2');
+define('TAOS_COMMERCE_VERSION', '1.2.3');
 define('TAOS_COMMERCE_PATH', plugin_dir_path(__FILE__));
 define('TAOS_COMMERCE_URL', plugin_dir_url(__FILE__));
 
@@ -58,6 +58,7 @@ class TAOS_Commerce {
         add_action('init', [$this, 'register_shortcodes']);
         add_filter('query_vars', [$this, 'register_query_vars']);
         add_filter('template_include', [$this, 'maybe_load_checkout_template']);
+        add_action('template_redirect', [$this, 'handle_checkout_actions']);
     }
 
     public function check_upgrade() {
@@ -308,6 +309,7 @@ class TAOS_Commerce {
         $vars[] = 'taos_commerce_checkout';
         $vars[] = 'course';
         $vars[] = 'course_id';
+        $vars[] = 'taos_commerce_action';
         return $vars;
     }
 
@@ -349,6 +351,44 @@ class TAOS_Commerce {
         return $template;
     }
 
+    public function handle_checkout_actions() {
+        $action = get_query_var('taos_commerce_action');
+
+        if (empty($action)) {
+            return;
+        }
+
+        if (!in_array($action, ['create_order', 'capture_order'], true)) {
+            return;
+        }
+
+        if (strtoupper($_SERVER['REQUEST_METHOD'] ?? '') !== 'POST') {
+            wp_send_json_error(['message' => 'Invalid request method.'], 405);
+        }
+
+        $payload = $this->get_checkout_payload();
+
+        if ($action === 'create_order') {
+            $result = $this->process_checkout_order($payload);
+        } else {
+            $result = $this->process_checkout_capture($payload);
+        }
+
+        if (is_wp_error($result)) {
+            $error_data = $result->get_error_data();
+            $status = 400;
+            if (is_array($error_data) && isset($error_data['status'])) {
+                $status = $error_data['status'];
+            } elseif (is_int($error_data)) {
+                $status = $error_data;
+            }
+
+            wp_send_json_error(['message' => $result->get_error_message()], $status);
+        }
+
+        wp_send_json($result);
+    }
+
     public function handle_paypal_webhook(\WP_REST_Request $request) {
         $gateway = $this->gateway_registry->get('paypal');
         if (!$gateway) {
@@ -359,6 +399,11 @@ class TAOS_Commerce {
     }
 
     public function create_checkout_order(\WP_REST_Request $request) {
+        $user_id = $this->resolve_checkout_user_id();
+        if (is_wp_error($user_id)) {
+            return $user_id;
+        }
+
         $course_identifier = $request->get_param('course_id');
         if (!$course_identifier) {
             $course_identifier = $request->get_param('course');
@@ -370,6 +415,22 @@ class TAOS_Commerce {
 
         $gateway_id = sanitize_text_field($request->get_param('gateway'));
 
+        return $this->create_order_for_course($course_identifier, $gateway_id, $user_id);
+    }
+
+    private function process_checkout_order(array $payload) {
+        $user_id = $this->resolve_checkout_user_id();
+        if (is_wp_error($user_id)) {
+            return $user_id;
+        }
+
+        $course_identifier = $payload['course_id'] ?? ($payload['course'] ?? ($payload['course_key'] ?? ''));
+        $gateway_id = sanitize_text_field($payload['gateway'] ?? '');
+
+        return $this->create_order_for_course($course_identifier, $gateway_id, $user_id);
+    }
+
+    private function create_order_for_course($course_identifier, $gateway_id, $user_id) {
         if (empty($course_identifier) || empty($gateway_id)) {
             return new \WP_Error('missing_params', 'Missing required parameters', ['status' => 400]);
         }
@@ -415,7 +476,7 @@ class TAOS_Commerce {
             return new \WP_Error('gateway_not_allowed', 'Gateway not enabled for this course', ['status' => 400]);
         }
 
-        $result = $gateway->create_order($course, get_current_user_id());
+        $result = $gateway->create_order($course, $user_id);
 
         if (is_wp_error($result)) {
             taos_commerce_log('Gateway returned error during order creation', ['gateway' => $gateway_id, 'error' => $result->get_error_message()]);
@@ -434,12 +495,33 @@ class TAOS_Commerce {
         $paypal_order_id = sanitize_text_field($request->get_param('paypal_order_id'));
         $order_id = intval($request->get_param('order_id'));
 
+        $user_id = $this->resolve_checkout_user_id();
+        if (is_wp_error($user_id)) {
+            return $user_id;
+        }
+
+        return $this->capture_order_for_user($paypal_order_id, $order_id, $user_id);
+    }
+
+    private function process_checkout_capture(array $payload) {
+        $paypal_order_id = sanitize_text_field($payload['paypal_order_id'] ?? '');
+        $order_id = intval($payload['order_id'] ?? 0);
+
+        $user_id = $this->resolve_checkout_user_id();
+        if (is_wp_error($user_id)) {
+            return $user_id;
+        }
+
+        return $this->capture_order_for_user($paypal_order_id, $order_id, $user_id);
+    }
+
+    private function capture_order_for_user($paypal_order_id, $order_id, $user_id) {
         if (empty($paypal_order_id) || empty($order_id)) {
             return new \WP_Error('missing_params', 'Missing required parameters', ['status' => 400]);
         }
 
         $order = TAOS_Commerce_Order::get_by_id($order_id);
-        if (!$order || $order->user_id !== get_current_user_id()) {
+        if (!$order || $order->user_id !== $user_id) {
             return new \WP_Error('order_not_found', 'Order not found', ['status' => 404]);
         }
 
@@ -472,6 +554,37 @@ class TAOS_Commerce {
         taos_commerce_log('PayPal payment captured and order completed', ['order_id' => $order_id]);
 
         return ['success' => true, 'message' => 'Payment completed successfully'];
+    }
+
+    private function resolve_checkout_user_id() {
+        $user_id = get_current_user_id();
+
+        if (is_user_logged_in() && $user_id === 0) {
+            taos_commerce_log('Logged-in user resolved to 0 during checkout', [
+                'request_uri' => $_SERVER['REQUEST_URI'] ?? ''
+            ]);
+            return new \WP_Error('invalid_user_context', 'Unable to resolve logged-in user', ['status' => 500]);
+        }
+
+        return $user_id;
+    }
+
+    private function get_checkout_payload() {
+        $payload = [];
+
+        if (!empty($_POST)) {
+            $payload = wp_unslash($_POST);
+        }
+
+        $raw_input = file_get_contents('php://input');
+        if (!empty($raw_input)) {
+            $decoded = json_decode($raw_input, true);
+            if (is_array($decoded)) {
+                $payload = array_merge($payload, $decoded);
+            }
+        }
+
+        return $payload;
     }
 
     private function get_checkout_markup($course_identifier) {
