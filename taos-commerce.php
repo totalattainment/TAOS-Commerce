@@ -119,10 +119,12 @@ class TAOS_Commerce {
 
         CREATE TABLE $entitlements_table (
             id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+            user_id bigint(20) unsigned NOT NULL,
             course_id bigint(20) unsigned NOT NULL,
             entitlement_slug varchar(100) NOT NULL,
             PRIMARY KEY (id),
-            KEY course_id (course_id)
+            KEY course_id (course_id),
+            KEY idx_user_course (user_id, course_id)
         ) $charset_collate;
 
         CREATE TABLE $orders_table (
@@ -550,10 +552,27 @@ class TAOS_Commerce {
         }
 
         TAOS_Commerce_Order::complete_order($order_id, $paypal_order_id, $result);
+        $this->store_user_entitlement($order);
 
         taos_commerce_log('PayPal payment captured and order completed', ['order_id' => $order_id]);
 
         return ['success' => true, 'message' => 'Payment completed successfully'];
+    }
+
+    private function store_user_entitlement($order) {
+        $current_user_id = get_current_user_id();
+        if (empty($current_user_id) || empty($order) || empty($order->course_id)) {
+            return;
+        }
+
+        global $wpdb;
+        $table = $wpdb->prefix . 'taos_commerce_course_entitlements';
+        $wpdb->query($wpdb->prepare(
+            "INSERT INTO $table (user_id, course_id, entitlement_slug) VALUES (%d, %d, %s)",
+            $current_user_id,
+            $order->course_id,
+            (string) $order->course_id
+        ));
     }
 
     private function resolve_checkout_user_id() {
