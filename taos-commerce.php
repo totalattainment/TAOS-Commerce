@@ -552,7 +552,10 @@ class TAOS_Commerce {
         }
 
         TAOS_Commerce_Order::complete_order($order_id, $paypal_order_id, $result);
-        $this->store_user_entitlement($order);
+        $entitlement_result = $this->store_user_entitlement($order);
+        if (is_wp_error($entitlement_result)) {
+            return $entitlement_result;
+        }
 
         taos_commerce_log('PayPal payment captured and order completed', ['order_id' => $order_id]);
 
@@ -561,18 +564,40 @@ class TAOS_Commerce {
 
     private function store_user_entitlement($order) {
         $current_user_id = get_current_user_id();
-        if (empty($current_user_id) || empty($order) || empty($order->course_id)) {
-            return;
+        if (empty($current_user_id)) {
+            if (function_exists('taos_commerce_log')) {
+                taos_commerce_log('Entitlement insert failed: missing user_id', [
+                    'order_id' => $order ? $order->id : null
+                ]);
+            }
+            return new \WP_Error('missing_user_id', 'Unable to create entitlement without a user.', ['status' => 400]);
+        }
+
+        if (empty($order) || empty($order->course_id)) {
+            return new \WP_Error('invalid_entitlement_data', 'Missing order data for entitlement insert.', ['status' => 400]);
         }
 
         global $wpdb;
         $table = $wpdb->prefix . 'taos_commerce_course_entitlements';
-        $wpdb->query($wpdb->prepare(
+        $result = $wpdb->query($wpdb->prepare(
             "INSERT INTO $table (user_id, course_id, entitlement_slug) VALUES (%d, %d, %s)",
             $current_user_id,
             $order->course_id,
             (string) $order->course_id
         ));
+        if ($result === false) {
+            if (function_exists('taos_commerce_log')) {
+                taos_commerce_log('Entitlement insert failed', [
+                    'order_id' => $order->id,
+                    'user_id' => $current_user_id,
+                    'course_id' => $order->course_id,
+                    'db_error' => $wpdb->last_error
+                ]);
+            }
+            return new \WP_Error('entitlement_insert_failed', 'Failed to create entitlement record.', ['status' => 500]);
+        }
+
+        return true;
     }
 
     private function resolve_checkout_user_id() {
